@@ -1,117 +1,37 @@
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+package cache;
 
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
-public class Main {
+public class MemoryCache {
 
-    public static void main(String[] args) throws Exception {
-        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+    private static final Map<String, CacheEntry> CACHE = new HashMap<>();
+    private static final long TTL_MILLIS = 1000;
 
-        // Root
-        server.createContext("/", exchange -> {
-            if (handleHead(exchange)) return;
-            sendText(exchange, "VyapaarX Backend Running 🚀");
-        });
+    public static synchronized String get(String key) {
+        CacheEntry entry = CACHE.get(key);
+        if (entry == null) return null;
 
-        // Health
-        server.createContext("/health", exchange -> {
-            if (handleHead(exchange)) return;
-            sendJson(exchange, "{\"status\":\"ok\"}");
-        });
-
-        // 🔥 BULK QUOTES (MAIN API)
-        server.createContext("/quotes", exchange -> {
-            try {
-                if (handleHead(exchange)) return;
-
-                String accessToken = System.getenv("UPSTOX_ACCESS_TOKEN");
-                if (accessToken == null || accessToken.isBlank()) {
-                    sendJson(exchange, "{\"error\":\"Missing token\"}");
-                    return;
-                }
-
-                String keys = getQueryParam(exchange.getRequestURI(), "keys");
-
-                if (keys == null || keys.isBlank()) {
-                    // default indices
-                    keys = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank";
-                }
-
-                String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key=" +
-                        URLEncoder.encode(keys, StandardCharsets.UTF_8);
-
-                HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("Authorization", "Bearer " + accessToken);
-                conn.setRequestProperty("Accept", "application/json");
-
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(conn.getInputStream())
-                );
-
-                String line;
-                StringBuilder response = new StringBuilder();
-
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-
-                reader.close();
-
-                sendJson(exchange, response.toString());
-
-            } catch (Exception e) {
-                sendJson(exchange, "{\"error\":\"" + e.getMessage() + "\"}");
-            }
-        });
-
-        server.setExecutor(null);
-        server.start();
-        System.out.println("Server started on port " + port);
-    }
-
-    // ================= HELPERS =================
-
-    private static boolean handleHead(HttpExchange exchange) throws IOException {
-        if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(200, -1);
-            return true;
+        long age = System.currentTimeMillis() - entry.timestamp;
+        if (age > TTL_MILLIS) {
+            CACHE.remove(key);
+            return null;
         }
-        return false;
+
+        return entry.data;
     }
 
-    private static void sendText(HttpExchange exchange, String response) throws IOException {
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "text/plain");
-        exchange.sendResponseHeaders(200, bytes.length);
-        OutputStream os = exchange.getResponseBody();
-        os.write(bytes);
-        os.close();
+    public static synchronized void put(String key, String data) {
+        CACHE.put(key, new CacheEntry(data, System.currentTimeMillis()));
     }
 
-    private static void sendJson(HttpExchange exchange, String json) throws IOException {
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "application/json");
-        exchange.sendResponseHeaders(200, bytes.length);
-        OutputStream os = exchange.getResponseBody();
-        os.write(bytes);
-        os.close();
-    }
+    private static class CacheEntry {
+        String data;
+        long timestamp;
 
-    private static String getQueryParam(URI uri, String key) {
-        String query = uri.getRawQuery();
-        if (query == null) return null;
-
-        for (String param : query.split("&")) {
-            String[] pair = param.split("=");
-            if (pair.length == 2 && pair[0].equals(key)) {
-                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
-            }
+        CacheEntry(String data, long timestamp) {
+            this.data = data;
+            this.timestamp = timestamp;
         }
-        return null;
     }
 }
