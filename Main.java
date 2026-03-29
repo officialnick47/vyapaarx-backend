@@ -1,5 +1,6 @@
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import controller.QuotesController;
 
 import java.io.*;
 import java.net.*;
@@ -23,58 +24,16 @@ public class Main {
             sendJson(exchange, "{\"status\":\"ok\"}");
         });
 
-        // 🔥 BULK QUOTES (MAIN API)
+        // Quotes
         server.createContext("/quotes", exchange -> {
-            try {
-                if (handleHead(exchange)) return;
-
-                String accessToken = System.getenv("UPSTOX_ACCESS_TOKEN");
-                if (accessToken == null || accessToken.isBlank()) {
-                    sendJson(exchange, "{\"error\":\"Missing token\"}");
-                    return;
-                }
-
-                String keys = getQueryParam(exchange.getRequestURI(), "keys");
-
-                if (keys == null || keys.isBlank()) {
-                    // default indices
-                    keys = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank";
-                }
-
-                String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key=" +
-                        URLEncoder.encode(keys, StandardCharsets.UTF_8);
-
-                HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("Authorization", "Bearer " + accessToken);
-                conn.setRequestProperty("Accept", "application/json");
-
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(conn.getInputStream())
-                );
-
-                String line;
-                StringBuilder response = new StringBuilder();
-
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-
-                reader.close();
-
-                sendJson(exchange, response.toString());
-
-            } catch (Exception e) {
-                sendJson(exchange, "{\"error\":\"" + e.getMessage() + "\"}");
-            }
+            if (handleHead(exchange)) return;
+            QuotesController.handle(exchange);
         });
 
         server.setExecutor(null);
         server.start();
         System.out.println("Server started on port " + port);
     }
-
-    // ================= HELPERS =================
 
     private static boolean handleHead(HttpExchange exchange) throws IOException {
         if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -100,18 +59,5 @@ public class Main {
         OutputStream os = exchange.getResponseBody();
         os.write(bytes);
         os.close();
-    }
-
-    private static String getQueryParam(URI uri, String key) {
-        String query = uri.getRawQuery();
-        if (query == null) return null;
-
-        for (String param : query.split("&")) {
-            String[] pair = param.split("=");
-            if (pair.length == 2 && pair[0].equals(key)) {
-                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
-            }
-        }
-        return null;
     }
 }
