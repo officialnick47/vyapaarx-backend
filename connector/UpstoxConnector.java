@@ -16,6 +16,10 @@ public class UpstoxConnector {
             return "{\"error\":\"Missing token\"}";
         }
 
+        if (keys == null || keys.isBlank()) {
+            return "{\"error\":\"No keys provided\"}";
+        }
+
         String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key="
                 + URLEncoder.encode(keys, StandardCharsets.UTF_8);
 
@@ -32,6 +36,11 @@ public class UpstoxConnector {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)
             );
         } else {
+            if (conn.getErrorStream() == null) {
+                conn.disconnect();
+                return "{\"error\":\"Upstream request failed with status " + statusCode + "\"}";
+            }
+
             reader = new BufferedReader(
                     new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8)
             );
@@ -47,6 +56,18 @@ public class UpstoxConnector {
         reader.close();
         conn.disconnect();
 
-        return response.toString();
+        String responseText = response.toString();
+
+        if (statusCode >= 200 && statusCode < 300) {
+            return responseText;
+        }
+
+        return "{\"error\":\"Upstream error\",\"status\":" + statusCode + ",\"details\":\""
+                + escapeJson(responseText) + "\"}";
+    }
+
+    private static String escapeJson(String text) {
+        if (text == null) return "";
+        return text.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
