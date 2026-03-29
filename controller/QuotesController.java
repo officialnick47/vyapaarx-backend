@@ -1,26 +1,51 @@
-package service;
+package controller;
 
-import cache.MemoryCache;
-import connector.UpstoxConnector;
+import com.sun.net.httpserver.HttpExchange;
+import service.QuotesService;
 
-public class QuotesService {
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 
-    public static String getQuotes(String symbols) throws Exception {
+public class QuotesController {
 
-        if (symbols == null || symbols.isEmpty()) {
-            symbols = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank";
+    public static void handle(HttpExchange exchange) throws IOException {
+        try {
+            String keys = getQueryParam(exchange.getRequestURI(), "keys");
+            String response = QuotesService.getQuotes(keys);
+            sendJson(exchange, response);
+        } catch (Exception e) {
+            sendJson(exchange, "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
         }
+    }
 
-        String cached = MemoryCache.get(symbols);
+    private static void sendJson(HttpExchange exchange, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, bytes.length);
 
-        if (cached != null) {
-            return cached;
+        OutputStream os = exchange.getResponseBody();
+        os.write(bytes);
+        os.close();
+    }
+
+    private static String getQueryParam(URI uri, String key) {
+        String query = uri.getRawQuery();
+        if (query == null) return null;
+
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=", 2);
+            if (pair.length == 2 && pair[0].equals(key)) {
+                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+            }
         }
+        return null;
+    }
 
-        String data = UpstoxConnector.fetchQuotes(symbols);
-
-        MemoryCache.put(symbols, data);
-
-        return data;
+    private static String escapeJson(String text) {
+        if (text == null) return "";
+        return text.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
