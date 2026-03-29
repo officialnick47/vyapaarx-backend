@@ -1,16 +1,8 @@
 import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
+import java.io.*;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 
 public class Main {
@@ -19,148 +11,107 @@ public class Main {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
-        server.createContext("/", new HttpHandler() {
-            @Override
-            public void handle(HttpExchange exchange) throws IOException {
-                sendText(exchange, 200, "VyapaarX Backend Running");
-            }
+        // Root
+        server.createContext("/", exchange -> {
+            if (handleHead(exchange)) return;
+            sendText(exchange, "VyapaarX Backend Running 🚀");
         });
 
-        server.createContext("/health", new HttpHandler() {
-            @Override
-            public void handle(HttpExchange exchange) throws IOException {
-                sendJson(exchange, 200, "{\"status\":\"ok\",\"service\":\"vyapaarx-backend\"}");
-            }
+        // Health
+        server.createContext("/health", exchange -> {
+            if (handleHead(exchange)) return;
+            sendJson(exchange, "{\"status\":\"ok\"}");
         });
 
-        server.createContext("/price", new HttpHandler() {
-            @Override
-            public void handle(HttpExchange exchange) throws IOException {
-                handlePrice(exchange);
+        // 🔥 BULK QUOTES (MAIN API)
+        server.createContext("/quotes", exchange -> {
+            try {
+                if (handleHead(exchange)) return;
+
+                String accessToken = System.getenv("UPSTOX_ACCESS_TOKEN");
+                if (accessToken == null || accessToken.isBlank()) {
+                    sendJson(exchange, "{\"error\":\"Missing token\"}");
+                    return;
+                }
+
+                String keys = getQueryParam(exchange.getRequestURI(), "keys");
+
+                if (keys == null || keys.isBlank()) {
+                    // default indices
+                    keys = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank";
+                }
+
+                String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key=" +
+                        URLEncoder.encode(keys, StandardCharsets.UTF_8);
+
+                HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+                conn.setRequestProperty("Accept", "application/json");
+
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream())
+                );
+
+                String line;
+                StringBuilder response = new StringBuilder();
+
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+
+                reader.close();
+
+                sendJson(exchange, response.toString());
+
+            } catch (Exception e) {
+                sendJson(exchange, "{\"error\":\"" + e.getMessage() + "\"}");
             }
         });
 
         server.setExecutor(null);
         server.start();
-
         System.out.println("Server started on port " + port);
     }
 
-    private static void handlePrice(HttpExchange exchange) throws IOException {
-        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
-            return;
+    // ================= HELPERS =================
+
+    private static boolean handleHead(HttpExchange exchange) throws IOException {
+        if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(200, -1);
+            return true;
         }
+        return false;
+    }
 
-        String accessToken = System.getenv("UPSTOX_ACCESS_TOKEN");
-        if (accessToken == null || accessToken.isBlank()) {
-            sendJson(exchange, 500, "{\"error\":\"Missing UPSTOX_ACCESS_TOKEN env var\"}");
-            return;
-        }
+    private static void sendText(HttpExchange exchange, String response) throws IOException {
+        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "text/plain");
+        exchange.sendResponseHeaders(200, bytes.length);
+        OutputStream os = exchange.getResponseBody();
+        os.write(bytes);
+        os.close();
+    }
 
-        String instrumentKey = getQueryParam(exchange.getRequestURI(), "instrument_key");
-        if (instrumentKey == null || instrumentKey.isBlank()) {
-            instrumentKey = "NSE_INDEX|Nifty 50";
-        }
-
-        String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key="
-                + urlEncode(instrumentKey);
-
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(apiUrl);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(15000);
-            conn.setRequestProperty("Accept", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
-
-            int statusCode = conn.getResponseCode();
-            String responseBody = readResponseBody(
-                    statusCode >= 200 && statusCode < 300
-                            ? conn.getInputStream()
-                            : conn.getErrorStream()
-            );
-
-            sendJson(exchange, statusCode, responseBody);
-
-        } catch (Exception e) {
-            String safeMessage = escapeJson(e.getMessage() == null ? "Unknown error" : e.getMessage());
-            sendJson(exchange, 500, "{\"error\":\"" + safeMessage + "\"}");
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
-        }
+    private static void sendJson(HttpExchange exchange, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, bytes.length);
+        OutputStream os = exchange.getResponseBody();
+        os.write(bytes);
+        os.close();
     }
 
     private static String getQueryParam(URI uri, String key) {
         String query = uri.getRawQuery();
-        if (query == null || query.isBlank()) {
-            return null;
-        }
+        if (query == null) return null;
 
-        String[] pairs = query.split("&");
-        for (String pair : pairs) {
-            int idx = pair.indexOf('=');
-            if (idx <= 0) {
-                continue;
-            }
-
-            String k = decode(pair.substring(0, idx));
-            if (key.equals(k)) {
-                return decode(pair.substring(idx + 1));
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=");
+            if (pair.length == 2 && pair[0].equals(key)) {
+                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
             }
         }
         return null;
-    }
-
-    private static String readResponseBody(InputStream inputStream) throws IOException {
-        if (inputStream == null) {
-            return "";
-        }
-
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-        }
-        return sb.toString();
-    }
-
-    private static void sendText(HttpExchange exchange, int statusCode, String response) throws IOException {
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
-        exchange.sendResponseHeaders(statusCode, bytes.length);
-
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
-    }
-
-    private static void sendJson(HttpExchange exchange, int statusCode, String json) throws IOException {
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        exchange.sendResponseHeaders(statusCode, bytes.length);
-
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
-    }
-
-    private static String urlEncode(String value) {
-        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
-    }
-
-    private static String decode(String value) {
-        return java.net.URLDecoder.decode(value, StandardCharsets.UTF_8);
-    }
-
-    private static String escapeJson(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
