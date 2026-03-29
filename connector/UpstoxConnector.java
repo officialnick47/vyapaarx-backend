@@ -1,40 +1,36 @@
-package connector;
+package cache;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 
-public class UpstoxConnector {
+public class MemoryCache {
+    private static final Map<String, CacheEntry> CACHE = new HashMap<>();
+    private static final long TTL_MILLIS = 1000;
 
-    public static String fetchQuotes(String symbols) throws Exception {
+    public static synchronized String get(String key) {
+        CacheEntry entry = CACHE.get(key);
+        if (entry == null) return null;
 
-        String token = System.getenv("UPSTOX_ACCESS_TOKEN");
-
-        if (token == null || token.isEmpty()) {
-            return "{\"error\":\"Missing token\"}";
+        long age = System.currentTimeMillis() - entry.timestamp;
+        if (age > TTL_MILLIS) {
+            CACHE.remove(key);
+            return null;
         }
 
-        String apiUrl = "https://api.upstox.com/v2/market-quote/quotes?instrument_key=" + symbols;
+        return entry.data;
+    }
 
-        URL url = new URL(apiUrl);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+    public static synchronized void put(String key, String data) {
+        CACHE.put(key, new CacheEntry(data, System.currentTimeMillis()));
+    }
 
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("Authorization", "Bearer " + token);
-        conn.setRequestProperty("Accept", "application/json");
+    private static class CacheEntry {
+        String data;
+        long timestamp;
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-
-        StringBuilder response = new StringBuilder();
-        String line;
-
-        while ((line = reader.readLine()) != null) {
-            response.append(line);
+        CacheEntry(String data, long timestamp) {
+            this.data = data;
+            this.timestamp = timestamp;
         }
-
-        reader.close();
-
-        return response.toString();
     }
 }
