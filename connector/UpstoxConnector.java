@@ -1,36 +1,52 @@
-package cache;
+package connector;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
-public class MemoryCache {
-    private static final Map<String, CacheEntry> CACHE = new HashMap<>();
-    private static final long TTL_MILLIS = 1000;
+public class UpstoxConnector {
 
-    public static synchronized String get(String key) {
-        CacheEntry entry = CACHE.get(key);
-        if (entry == null) return null;
+    public static String fetchLtpQuotes(String keys) throws Exception {
+        String accessToken = System.getenv("UPSTOX_ACCESS_TOKEN");
 
-        long age = System.currentTimeMillis() - entry.timestamp;
-        if (age > TTL_MILLIS) {
-            CACHE.remove(key);
-            return null;
+        if (accessToken == null || accessToken.isBlank()) {
+            return "{\"error\":\"Missing token\"}";
         }
 
-        return entry.data;
-    }
+        String apiUrl = "https://api.upstox.com/v2/market-quote/ltp?instrument_key="
+                + URLEncoder.encode(keys, StandardCharsets.UTF_8);
 
-    public static synchronized void put(String key, String data) {
-        CACHE.put(key, new CacheEntry(data, System.currentTimeMillis()));
-    }
+        HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+        conn.setRequestProperty("Accept", "application/json");
 
-    private static class CacheEntry {
-        String data;
-        long timestamp;
+        int statusCode = conn.getResponseCode();
 
-        CacheEntry(String data, long timestamp) {
-            this.data = data;
-            this.timestamp = timestamp;
+        BufferedReader reader;
+        if (statusCode >= 200 && statusCode < 300) {
+            reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8)
+            );
+        } else {
+            reader = new BufferedReader(
+                    new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8)
+            );
         }
+
+        StringBuilder response = new StringBuilder();
+        String line;
+
+        while ((line = reader.readLine()) != null) {
+            response.append(line);
+        }
+
+        reader.close();
+        conn.disconnect();
+
+        return response.toString();
     }
 }
