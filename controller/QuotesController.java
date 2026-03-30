@@ -1,60 +1,41 @@
-package controller;
+package service;
 
-import com.sun.net.httpserver.HttpExchange;
-import service.QuotesService;
+import cache.MemoryCache;
+import connector.UpstoxConnector;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.URI;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+public class QuotesService {
+    private static final String KEYS = "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank";
 
-public class QuotesController {
+    // App dashboard calls this
+    public static String getQuotesFromCache() {
+        String data = MemoryCache.get("live_data");
+        return (data != null) ? data : "{\"status\":\"loading\",\"msg\":\"Warming up engine...\"}";
+    }
 
-    public static void handle(HttpExchange exchange) throws IOException {
+    // Background Worker calls this every 1.5s
+    public static void refreshQuotes() {
         try {
-            String method = exchange.getRequestMethod();
-
-            if (!"GET".equalsIgnoreCase(method)) {
-                sendJson(exchange, 405, "{\"error\":\"Method not allowed\"}");
-                return;
+            String raw = UpstoxConnector.fetchLtpQuotes(KEYS);
+            if (raw != null && !raw.contains("\"error\"")) {
+                MemoryCache.put("live_data", cleanData(raw));
             }
-
-            String keys = getQueryParam(exchange.getRequestURI(), "keys");
-
-            String response = QuotesService.getQuotes(keys);
-            sendJson(exchange, 200, response);
-
         } catch (Exception e) {
-            sendJson(exchange, 500, "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+            System.err.println("Refresh Failed: " + e.getMessage());
         }
     }
 
-    private static void sendJson(HttpExchange exchange, int statusCode, String json) throws IOException {
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-        exchange.sendResponseHeaders(statusCode, bytes.length);
-
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
+    private static String cleanData(String raw) {
+        Pattern p = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\\{[^\\}]*?\"last_price\"\\s*:\\s*([0-9.]+)[^\\}]*?\"instrument_token\"\\s*:\\s*\"([^\"]+)\"");
+        Matcher m = p.matcher(raw);
+        java.util.List<String> list = new java.util.ArrayList<>();
+        
+        while (m.find()) {
+            String sym = m.group(3).contains("Nifty Bank") ? "BANKNIFTY" : "NIFTY";
+            list.add(String.format("{\"symbol\":\"%s\",\"ltp\":%s,\"instrument\":\"%s\"}", sym, m.group(2), m.group(3)));
         }
-    }
-
-    private static String getQueryParam(URI uri, String key) {
-        String query = uri.getRawQuery();
-        if (query == null || query.isBlank()) return null;
-
-        for (String param : query.split("&")) {
-            String[] pair = param.split("=", 2);
-            if (pair.length == 2 && pair[0].equals(key)) {
-                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
-            }
-        }
-        return null;
-    }
-
-    private static String escapeJson(String text) {
-        if (text == null) return "";
-        return text.replace("\\", "\\\\").replace("\"", "\\\"");
+        
+        return String.format("{\"timestamp\":%d,\"data\":[%s]}", System.currentTimeMillis(), String.join(",", list));
     }
 }
