@@ -10,7 +10,10 @@ public class RewardService {
 
     private static final long ONE_DAY_MS = 24L * 60L * 60L * 1000L;
     private static final long AD_COOLDOWN_MS = 30L * 60L * 1000L;
+
     private static final int MAX_AD_REWARD_PER_DAY = 3;
+    public static final double DAILY_LOGIN_REWARD = 500.0;
+    public static final double AD_REWARD_AMOUNT = 1000.0;
 
     public static String getRewardSnapshot(String userId) {
         long now = System.currentTimeMillis();
@@ -29,6 +32,8 @@ public class RewardService {
 
         return "{"
                 + "\"loginRewardAvailable\":" + loginRewardAvailable + ","
+                + "\"dailyLoginReward\":" + DAILY_LOGIN_REWARD + ","
+                + "\"adRewardAmount\":" + AD_REWARD_AMOUNT + ","
                 + "\"adRewardsUsedToday\":" + adCount + ","
                 + "\"adRewardsRemaining\":" + Math.max(0, MAX_AD_REWARD_PER_DAY - adCount) + ","
                 + "\"nextAdRewardInMs\":" + nextAdInMs
