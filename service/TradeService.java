@@ -4,15 +4,17 @@ import model.Portfolio;
 import model.Trade;
 import model.User;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class TradeService {
 
-    private static final ConcurrentHashMap<String, List<Trade>> TRADE_HISTORY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, CopyOnWriteArrayList<Trade>> TRADE_HISTORY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, Integer>> POSITION_BOOK = new ConcurrentHashMap<>();
 
     public static String executeTrade(String userId, String body) {
         try {
@@ -31,35 +33,51 @@ public class TradeService {
             if (quantity <= 0) return error("Invalid quantity");
             if (price <= 0) return error("Invalid price");
 
+            action = action.toUpperCase();
+            symbol = symbol.toUpperCase();
+            side = side.toUpperCase();
+
             double tradeValue = quantity * price;
 
-            if ("BUY".equalsIgnoreCase(action)) {
-                if (portfolio.getBalance() < tradeValue) {
-                    return error("Insufficient balance");
+            ConcurrentHashMap<String, Integer> positions =
+                    POSITION_BOOK.computeIfAbsent(userId, k -> new ConcurrentHashMap<>());
+
+            int currentQty = positions.getOrDefault(symbol, 0);
+
+            synchronized (portfolio) {
+                if ("BUY".equals(action)) {
+                    if (portfolio.getBalance() < tradeValue) {
+                        return error("Insufficient balance");
+                    }
+                    portfolio.setBalance(portfolio.getBalance() - tradeValue);
+                    portfolio.setUsedMargin(portfolio.getUsedMargin() + tradeValue);
+                    positions.put(symbol, currentQty + quantity);
+
+                } else if ("SELL".equals(action)) {
+                    if (currentQty < quantity) {
+                        return error("Insufficient position quantity");
+                    }
+                    portfolio.setBalance(portfolio.getBalance() + tradeValue);
+                    portfolio.setUsedMargin(Math.max(0.0, portfolio.getUsedMargin() - tradeValue));
+                    positions.put(symbol, currentQty - quantity);
+
+                } else {
+                    return error("Unsupported action");
                 }
-                portfolio.setBalance(portfolio.getBalance() - tradeValue);
-                portfolio.setUsedMargin(portfolio.getUsedMargin() + tradeValue);
-
-            } else if ("SELL".equalsIgnoreCase(action)) {
-                portfolio.setBalance(portfolio.getBalance() + tradeValue);
-                portfolio.setUsedMargin(Math.max(0.0, portfolio.getUsedMargin() - tradeValue));
-
-            } else {
-                return error("Unsupported action");
             }
 
             Trade trade = new Trade(
                     String.valueOf(System.nanoTime()),
                     userId,
-                    symbol.toUpperCase(),
-                    action.toUpperCase(),
-                    side.toUpperCase(),
+                    symbol,
+                    action,
+                    side,
                     quantity,
                     price,
                     System.currentTimeMillis()
             );
 
-            TRADE_HISTORY.computeIfAbsent(userId, k -> new ArrayList<>()).add(trade);
+            TRADE_HISTORY.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(trade);
             UserService.savePortfolio(portfolio);
 
             return "{"
@@ -68,7 +86,8 @@ public class TradeService {
                     + "\"data\":{"
                     + "\"userId\":\"" + escape(user.getUserId()) + "\","
                     + "\"trade\":" + trade.toJson() + ","
-                    + "\"portfolio\":" + portfolio.toJson()
+                    + "\"portfolio\":" + portfolio.toJson() + ","
+                    + "\"positions\":" + positionsToJson(positions)
                     + "},"
                     + "\"error\":null"
                     + "}";
@@ -80,7 +99,9 @@ public class TradeService {
 
     public static String getPortfolio(String userId) {
         Portfolio portfolio = UserService.getPortfolioObject(userId);
-        List<Trade> trades = TRADE_HISTORY.computeIfAbsent(userId, k -> new ArrayList<>());
+        List<Trade> trades = TRADE_HISTORY.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
+        ConcurrentHashMap<String, Integer> positions =
+                POSITION_BOOK.computeIfAbsent(userId, k -> new ConcurrentHashMap<>());
 
         StringBuilder tradeJson = new StringBuilder();
         tradeJson.append("[");
@@ -99,10 +120,24 @@ public class TradeService {
                 + "\"timestamp\":" + System.currentTimeMillis() + ","
                 + "\"data\":{"
                 + "\"portfolio\":" + portfolio.toJson() + ","
+                + "\"positions\":" + positionsToJson(positions) + ","
                 + "\"trades\":" + tradeJson
                 + "},"
                 + "\"error\":null"
                 + "}";
+    }
+
+    private static String positionsToJson(Map<String, Integer> positions) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        boolean first = true;
+        for (Map.Entry<String, Integer> entry : positions.entrySet()) {
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(escape(entry.getKey())).append("\":").append(entry.getValue());
+        }
+        sb.append("}");
+        return sb.toString();
     }
 
     private static String extractString(String json, String key) {
