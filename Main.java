@@ -18,13 +18,17 @@ public class Main {
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
 
+        // Bootstrap default instruments
         InstrumentsService.bootstrapDefaults();
+
+        // Search API mode me ye no-op hai, but call rehne do future-safe
         InstrumentsService.syncMasterIfConfigured();
 
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
+        // Warm important quotes in background
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 QuotesService.warmCriticalQuotes();
@@ -33,14 +37,16 @@ public class Main {
             }
         }, 0, 2, TimeUnit.SECONDS);
 
+        // Optional periodic instrument refresh hook
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 InstrumentsService.syncMasterIfConfigured();
             } catch (Exception e) {
-                System.out.println("Instrument sync failed: " + e.getMessage());
+                System.out.println("Instrument sync hook failed: " + e.getMessage());
             }
         }, 30, 360, TimeUnit.MINUTES);
 
+        // Routes
         server.createContext("/quotes", QuotesController::handle);
         server.createContext("/quotes/batch", QuotesController::handle);
         server.createContext("/market/status", MarketController::handle);
@@ -63,6 +69,7 @@ public class Main {
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
             exchange.sendResponseHeaders(200, bytes.length);
+
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);
             }
