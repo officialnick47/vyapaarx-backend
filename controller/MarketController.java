@@ -28,7 +28,6 @@ public class MarketController {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(status, bytes.length);
-
         try (OutputStream os = ex.getResponseBody()) {
             os.write(bytes);
         }
