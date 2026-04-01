@@ -10,10 +10,13 @@ public class UserService {
     private static final ConcurrentHashMap<String, User> USERS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Portfolio> PORTFOLIOS = new ConcurrentHashMap<>();
 
+    private static final double FREE_INITIAL_BALANCE = 100000.0;
+    private static final double PREMIUM_INITIAL_BALANCE = 500000.0;
+
     public static String getOrCreateUser(String userId) {
         User user = USERS.computeIfAbsent(userId, id -> {
             boolean premium = false;
-            double initialBalance = premium ? 500000.0 : 100000.0;
+            double initialBalance = premium ? PREMIUM_INITIAL_BALANCE : FREE_INITIAL_BALANCE;
             Portfolio portfolio = new Portfolio(id, initialBalance, initialBalance, 0.0);
             PORTFOLIOS.put(id, portfolio);
             return new User(id, premium, initialBalance, System.currentTimeMillis(), System.currentTimeMillis());
@@ -26,11 +29,8 @@ public class UserService {
                 id -> new Portfolio(id, user.getAllocatedCapital(), user.getAllocatedCapital(), 0.0)
         );
 
-        if (RewardService.grantDailyLoginReward(userId)) {
-            double reward = user.isPremium() ? 0.0 : 2000.0;
-            if (reward > 0) {
-                portfolio.setBalance(portfolio.getBalance() + reward);
-            }
+        if (!user.isPremium() && RewardService.grantDailyLoginReward(userId)) {
+            portfolio.setBalance(portfolio.getBalance() + RewardService.DAILY_LOGIN_REWARD);
         }
 
         String rewards = RewardService.getRewardSnapshot(userId);
@@ -49,7 +49,7 @@ public class UserService {
 
     public static User getUserObject(String userId) {
         return USERS.computeIfAbsent(userId, id -> {
-            double initialBalance = 100000.0;
+            double initialBalance = FREE_INITIAL_BALANCE;
             PORTFOLIOS.putIfAbsent(id, new Portfolio(id, initialBalance, initialBalance, 0.0));
             return new User(id, false, initialBalance, System.currentTimeMillis(), System.currentTimeMillis());
         });
@@ -69,17 +69,30 @@ public class UserService {
         }
     }
 
+    public static boolean grantAdReward(String userId) {
+        User user = getUserObject(userId);
+        if (user.isPremium()) return false;
+
+        boolean granted = RewardService.grantAdReward(userId);
+        if (!granted) return false;
+
+        Portfolio portfolio = getPortfolioObject(userId);
+        portfolio.setBalance(portfolio.getBalance() + RewardService.AD_REWARD_AMOUNT);
+        savePortfolio(portfolio);
+        return true;
+    }
+
     public static void enablePremium(String userId) {
         User user = getUserObject(userId);
         user.setPremium(true);
-        user.setAllocatedCapital(500000.0);
+        user.setAllocatedCapital(PREMIUM_INITIAL_BALANCE);
 
         Portfolio portfolio = getPortfolioObject(userId);
-        if (portfolio.getBalance() < 500000.0) {
-            portfolio.setBalance(500000.0);
+        if (portfolio.getBalance() < PREMIUM_INITIAL_BALANCE) {
+            portfolio.setBalance(PREMIUM_INITIAL_BALANCE);
         }
-        if (portfolio.getInitialBalance() < 500000.0) {
-            portfolio.setInitialBalance(500000.0);
+        if (portfolio.getInitialBalance() < PREMIUM_INITIAL_BALANCE) {
+            portfolio.setInitialBalance(PREMIUM_INITIAL_BALANCE);
         }
 
         savePortfolio(portfolio);
