@@ -1,52 +1,54 @@
 import com.sun.net.httpserver.HttpServer;
+import controller.MarketController;
 import controller.QuotesController;
+import controller.TradeController;
+import controller.UserController;
 import service.QuotesService;
-import service.SearchService;
+
 import java.net.InetSocketAddress;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class Main {
-    public static void main(String[] args) {
-        try {
-            // 1. DYNAMIC PORT: Render assigns a port (default 8080 locally)
-            int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "10000"));
-            HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+    public static void main(String[] args) throws Exception {
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
-            System.out.println("VyapaarX Backend Starting on Port: " + port);
+        // Warm important quotes in background
+        ScheduledExecutorService warmWorker = Executors.newSingleThreadScheduledExecutor();
+        warmWorker.scheduleAtFixedRate(() -> {
+            try {
+                QuotesService.warmCriticalQuotes();
+            } catch (Exception e) {
+                System.out.println("Warmup failed: " + e.getMessage());
+            }
+        }, 0, 2, TimeUnit.SECONDS);
 
-            // 2. MASTER DATA SYNC: Start downloading 50,000+ symbols in background
-            // Iske bina Universal Search kaam nahi karega
-            SearchService.initMasterData();
+        // Routes
+        server.createContext("/quotes", QuotesController::handle);
+        server.createContext("/market/status", MarketController::handle);
+        server.createContext("/user/me", UserController::handle);
+        server.createContext("/trade", TradeController::handle);
 
-            // 3. BACKGROUND WORKER: Live Market Data Refresh (Every 1.5 Seconds)
-            // Ye Nifty/BankNifty aur Watchlist stocks ka LTP update karta rahega
-            ScheduledExecutorService marketEngine = Executors.newSingleThreadScheduledExecutor();
-            marketEngine.scheduleAtFixedRate(QuotesService::refreshQuotes, 2, 1500, TimeUnit.MILLISECONDS);
+        server.createContext("/health", exchange -> {
+            String response = "{"
+                    + "\"success\":true,"
+                    + "\"status\":\"ok\","
+                    + "\"service\":\"vyapaarx-backend\","
+                    + "\"timestamp\":" + System.currentTimeMillis()
+                    + "}";
+            byte[] bytes = response.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
 
-            // 4. API ENDPOINTS (Routing)
-            // Dono raste (Search aur Quotes) ab QuotesController ke paas jayenge
-            server.createContext("/quotes", QuotesController::handle);
-            server.createContext("/search", QuotesController::handle);
-            
-            // Health Check: Render ko batane ke liye ki server zinda hai
-            server.createContext("/health", ex -> {
-                String response = "{\"status\":\"online\", \"message\":\"VyapaarX Engine is Roaring!\"}";
-                byte[] bytes = response.getBytes();
-                ex.getResponseHeaders().set("Content-Type", "application/json");
-                ex.sendResponseHeaders(200, bytes.length);
-                ex.getResponseBody().write(bytes);
-                ex.getResponseBody().close();
-            });
+        server.setExecutor(Executors.newFixedThreadPool(16));
+        server.start();
 
-            // 5. THREAD POOL: Taaki multiple users ek saath app chalayein toh hang na ho
-            server.setExecutor(Executors.newFixedThreadPool(10));
-            
-            server.start();
-            System.out.println("✅ VyapaarX Institutional-Grade Backend is LIVE!");
-
-        } catch (Exception e) {
-            System.err.println("❌ Critical Server Failure: " + e.getMessage());
-            e.printStackTrace();
-        }
+        System.out.println("VyapaarX Backend Live on Port: " + port);
     }
 }
