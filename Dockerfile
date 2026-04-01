@@ -12,4 +12,4 @@ COPY --from=builder /app /app
 
 ENV PORT=8080
 
-CMD ["java", "-XX:+UseSerialGC", "-Xmx256m", "-Xms64m", "Main"]
+CMD ["java", "-XX:+UseSerialGC", "-Xms64m", "-Xmx256m", "Main"]
